@@ -2,21 +2,48 @@ package driver
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"log"
 	"net"
+	"os"
 
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/jnschaeffer/csi-driver-hello/internal/manager"
 	"google.golang.org/grpc"
+	"k8s.io/utils/mount"
 )
+
+type Option func(*Server)
+
+func WithManager(m manager.Interface) Option {
+	return func(s *Server) {
+		s.manager = m
+	}
+}
 
 type Server struct {
 	server   *grpc.Server
 	listener net.Listener
 	path     string
+	manager  manager.Interface
 }
 
-func NewServer(config Config) (*Server, error) {
+func NewServer(config Config, options ...Option) (*Server, error) {
 	if config.Path == "" {
 		return nil, errInvalidConfig
+	}
+
+	srv := &Server{
+		path: config.Path,
+	}
+
+	for _, opt := range options {
+		opt(srv)
+	}
+
+	if err := os.Remove(config.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
 	}
 
 	listener, err := net.Listen("unix", config.Path)
@@ -24,18 +51,25 @@ func NewServer(config Config) (*Server, error) {
 		return nil, err
 	}
 
+	srv.listener = listener
+
 	opts := []grpc.ServerOption{
 		grpc.UnaryInterceptor(loggingInterceptor()),
 	}
-	server := grpc.NewServer(opts...)
 
-	out := &Server{
-		server:   server,
-		listener: listener,
-		path:     config.Path,
+	srv.server = grpc.NewServer(opts...)
+
+	csi.RegisterIdentityServer(srv.server, &identityServer{})
+
+	nodeSrv := &nodeServer{
+		nodeName: config.NodeName,
+		manager:  srv.manager,
+		mounter:  mount.New(""),
 	}
 
-	return out, nil
+	csi.RegisterNodeServer(srv.server, nodeSrv)
+
+	return srv, nil
 }
 
 func (s *Server) Run() error {

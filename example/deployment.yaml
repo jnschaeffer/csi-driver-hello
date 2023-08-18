@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: csi-driver-hello
+  labels:
+    app: csi-driver-hello
+spec:
+  selector:
+    matchLabels:
+      app: csi-driver-hello
+  template:
+    metadata:
+      labels:
+        app: csi-driver-hello
+    spec:
+      containers:
+        - name: csi-driver
+          image: rra.experimental.systems/csi-driver-hello:latest
+          command:
+            - "/app/csi-driver-hello"
+            - "--v=6"
+          imagePullPolicy: Always
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - "SYS_ADMIN"
+            allowPrivilegeEscalation: true
+          env:
+            - name: CSI_MANAGER_PATH
+              value: /data
+            - name: CSI_DRIVER_PATH
+              value: /csi/csi.sock
+            - name: CSI_DRIVER_NODENAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: data
+              mountPath: /data
+            - name: pod-data
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+        - name: csi-driver-registrar
+          image: k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.5.0
+          args:
+            - "--v=6"
+            - "--csi-address=/csi/csi.sock"
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.experimental.systems/csi.sock"
+            - "--health-port=9809"
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          ports:
+            - containerPort: 9809
+              name: healthz
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+      imagePullSecrets:
+        - name: rra-regcred
+      volumes:
+        - name: data
+          hostPath:
+            path: /tmp
+            type: Directory
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry/
+            type: Directory
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.experimental.systems/
+            type: DirectoryOrCreate
+        - name: pod-data
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: alpine
+spec:
+  containers:
+    - name: alpine
+      image: alpine:3.18.3
+      # Just spin & wait forever
+      command: [ "/bin/sh", "-c", "--" ]
+      args: [ "while true; do sleep 30; done;" ]
+      volumeMounts:
+        - name: hello
+          mountPath: /hello
+  volumes:
+    - name: hello
+      csi:
+        driver: csi.experimental.systems
+---
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.experimental.systems
+spec:
+  attachRequired: false
+  podInfoOnMount: true
+  fsGroupPolicy: File
+  tokenRequests:
+    - audience: "iam.experimental.systems"
+      expirationSeconds: 3600
+  requiresRepublish: true
+  volumeLifecycleModes:
+    - Ephemeral

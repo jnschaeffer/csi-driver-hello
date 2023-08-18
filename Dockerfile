@@ -10,9 +10,9 @@ COPY . .
 
 RUN CGO_ENABLED=0 go build -v -mod=readonly
 
-FROM gcr.io/distroless/static-debian11 AS runner
+FROM alpine:3.18.3 AS runner
 
 COPY --from=build /build/csi-driver-hello /app/csi-driver-hello
 
-CMD ["/app/csi-driver-hello"]
+CMD "/app/csi-driver-hello"
 

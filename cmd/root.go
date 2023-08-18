@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -8,8 +9,11 @@ import (
 
 	"github.com/jnschaeffer/csi-driver-hello/internal/config"
 	"github.com/jnschaeffer/csi-driver-hello/internal/driver"
+	"github.com/jnschaeffer/csi-driver-hello/internal/manager"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"k8s.io/klog/v2"
 )
 
 var (
@@ -26,12 +30,16 @@ var (
 func init() {
 	cobra.OnInitialize(initConfig)
 
+	klog.InitFlags(nil)
+	pflag.CommandLine.AddGoFlag(flag.CommandLine.Lookup("v"))
+
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is /etc/csi-driver-hello/csi-driver-hello.yaml)")
 
 	v := viper.GetViper()
 	flags := rootCmd.Flags()
 
 	driver.MustViperFlags(v, flags)
+	manager.MustViperFlags(v, flags)
 
 	sigCh = make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
@@ -68,7 +76,12 @@ func initConfig() {
 }
 
 func serve() {
-	server, err := driver.NewServer(config.Config.Driver)
+	manager, err := manager.NewManager(config.Config.Manager)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	server, err := driver.NewServer(config.Config.Driver, driver.WithManager(manager))
 	if err != nil {
 		log.Fatal(err)
 	}
